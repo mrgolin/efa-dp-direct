@@ -13,7 +13,7 @@ CUDA/
 ├── common/
 │   └── efa_cuda_dp_types.h       # QP/CQ/WQ struct definitions (shared by host & device)
 ├── device/
-│   ├── efa_cuda_dp.cuh           # Datapath enums and __device__ function declarations
+│   ├── efa_cuda_dp_defs.cuh      # Datapath enums and device-side definitions
 │   ├── efa_cuda_dp_impl.cuh      # __device__ function implementations (include in kernels)
 │   └── efa_io_defs.h             # EFA I/O HW structure definitions (internal)
 ├── host/
@@ -63,7 +63,7 @@ struct efa_cuda_qp_attrs {
 
 **Note**: The `inlen` parameter enables compatibility checking - use `sizeof(attrs)` to allow the library to validate extended fields are zero.
 
-### Device-Side CUDA API (`device/efa_cuda_dp.cuh`)
+### Device-Side CUDA API (`device/efa_cuda_dp_impl.cuh`)
 
 #### Completion Queue Operations
 ```cuda
