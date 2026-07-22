@@ -12,7 +12,7 @@
 
 static bool is_buf_cleared(void *buf, size_t len)
 {
-	int i;
+	size_t i;
 
 	for (i = 0; i < len; i++) {
 		if (((uint8_t *)buf)[i])
