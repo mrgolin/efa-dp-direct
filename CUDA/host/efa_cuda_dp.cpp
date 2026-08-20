@@ -70,9 +70,8 @@ int efa_cuda_init_qp(struct efa_cuda_qp *qp, struct efa_cuda_qp_attrs *attrs, ui
 	qp->sq.wq.max_batch = attrs->sq_max_batch;
 	qp->sq.wq.queue_mask = attrs->sq_num_entries - 1;
 	qp->sq.wq.queue_size_shift = __builtin_ctz(attrs->sq_num_entries);
-	// TODO: get from args or delete:
-	qp->sq.max_inline_data = 32;
-	qp->sq.max_rdma_sges = 2;
+	qp->sq.max_inline_data = attrs->sq_max_inline_data;
+	qp->sq.max_rdma_sges = attrs->sq_max_rdma_sges;
 
 	qp->rq.wq.buf = attrs->rq_buffer;
 	qp->rq.wq.db = attrs->rq_doorbell;

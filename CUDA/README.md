@@ -46,18 +46,20 @@ struct efa_cuda_cq_attrs {
 };
 
 struct efa_cuda_qp_attrs {
-    uint64_t comp_mask;     // Reserved for future use
-    uint64_t flags;         // Reserved for future use
-    uint8_t *sq_buffer;     // Device buffer for send queue
-    uint8_t *rq_buffer;     // Device buffer for receive queue
-    uint32_t *sq_doorbell;  // Send queue doorbell pointer
-    uint32_t *rq_doorbell;  // Receive queue doorbell pointer
-    uint32_t sq_num_entries;// Send queue entries (must be power of 2)
-    uint32_t sq_entry_size; // Send queue entry size
-    uint32_t sq_max_batch;  // Maximum batch size for send operations
-    uint32_t rq_num_entries;// Receive queue entries (must be power of 2)
-    uint32_t rq_entry_size; // Receive queue entry size
-    uint32_t reserved;      // Must be zero
+    uint64_t comp_mask;         // Reserved for future use
+    uint64_t flags;             // Reserved for future use
+    uint8_t *sq_buffer;         // Device buffer for send queue
+    uint8_t *rq_buffer;         // Device buffer for receive queue
+    uint32_t *sq_doorbell;      // Send queue doorbell pointer
+    uint32_t *rq_doorbell;      // Receive queue doorbell pointer
+    uint32_t sq_num_entries;    // Send queue entries (must be power of 2)
+    uint32_t sq_entry_size;     // Send queue entry size
+    uint32_t sq_max_batch;      // Maximum batch size for send operations
+    uint32_t rq_num_entries;    // Receive queue entries (must be power of 2)
+    uint32_t rq_entry_size;     // Receive queue entry size
+    uint32_t sq_max_inline_data;// Maximum inline data size in send queue
+    uint32_t sq_max_rdma_sges;  // Maximum SGEs for RDMA operations
+    uint32_t reserved;          // Must be zero
 };
 ```
 

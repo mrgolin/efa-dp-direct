@@ -31,6 +31,8 @@ struct efa_cuda_qp_attrs {
 	uint32_t sq_max_batch;
 	uint32_t rq_num_entries;
 	uint32_t rq_entry_size;
+	uint32_t sq_max_inline_data;
+	uint32_t sq_max_rdma_sges;
 	uint32_t reserved;
 };
 
