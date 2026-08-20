@@ -384,18 +384,25 @@ __device__ static inline int efa_cuda_start_sq_batch(efa_cuda_qp *qp, int batch_
 
 __device__ static inline int efa_cuda_sq_batch_place_wr(efa_cuda_qp *qp, int index_in_batch, void *wr_buf)
 {
-	int wqe_phase = efa_cuda_get_wqe_phase(&qp->sq.wq, index_in_batch);
-	struct efa_io_tx_wqe *wqe = (struct efa_io_tx_wqe *)wr_buf;
-	uint32_t sq_desc_offset;
-	uint64_t *src;
-	uint64_t *dst;
+	struct efa_io_tx_meta_desc *meta = (struct efa_io_tx_meta_desc *)wr_buf;
+	uint32_t sq_desc_offset, queue_mask;
+	efa_cuda_sq *sq = &qp->sq;
+	uint64_t *src, *dst;
+	uint16_t wqe_size;
+	uint8_t *sq_buf;
+	int wqe_phase;
 
-	EFA_SET(&wqe->meta.ctrl2, EFA_IO_TX_META_DESC_PHASE, wqe_phase);
+	wqe_phase = efa_cuda_get_wqe_phase(&sq->wq, index_in_batch);
+	sq_buf = (uint8_t *)__ldg((uint64_t *)&sq->wq.buf);
+	queue_mask = __ldg(&sq->wq.queue_mask);
+	wqe_size = __ldg(&sq->wqe_size);
 
-	src = (uint64_t *)wqe;
-	sq_desc_offset = ((qp->sq.wq.pc + index_in_batch) & qp->sq.wq.queue_mask) * sizeof(struct efa_io_tx_wqe);
-	dst = (uint64_t *)(qp->sq.wq.buf + sq_desc_offset);
-	for (int i = 0 ; i < 8 ; i++)
+	EFA_SET(&meta->ctrl2, EFA_IO_TX_META_DESC_PHASE, wqe_phase);
+
+	src = (uint64_t *)wr_buf;
+	sq_desc_offset = ((sq->wq.pc + index_in_batch) & queue_mask) * wqe_size;
+	dst = (uint64_t *)(sq_buf + sq_desc_offset);
+	for (int i = 0 ; i < wqe_size / sizeof(uint64_t) ; i++)
 		dst[i] = src[i];
 
 	return 0;
