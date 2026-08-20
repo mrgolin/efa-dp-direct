@@ -72,6 +72,7 @@ int efa_cuda_init_qp(struct efa_cuda_qp *qp, struct efa_cuda_qp_attrs *attrs, ui
 	qp->sq.wq.queue_size_shift = __builtin_ctz(attrs->sq_num_entries);
 	qp->sq.max_inline_data = attrs->sq_max_inline_data;
 	qp->sq.max_rdma_sges = attrs->sq_max_rdma_sges;
+	qp->sq.wqe_size = attrs->sq_entry_size;
 
 	qp->rq.wq.buf = attrs->rq_buffer;
 	qp->rq.wq.db = attrs->rq_doorbell;

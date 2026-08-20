@@ -45,6 +45,7 @@ struct efa_cuda_sq {
 	struct efa_cuda_wq wq;
 	uint32_t max_inline_data;
 	uint32_t max_rdma_sges;
+	uint16_t wqe_size;
 };
 
 struct efa_cuda_qp {
