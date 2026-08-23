@@ -395,7 +395,7 @@ __device__ static inline int efa_cuda_sq_batch_place_wr(efa_cuda_qp *qp, int ind
 	wqe_phase = efa_cuda_get_wqe_phase(&sq->wq, index_in_batch);
 	sq_buf = (uint8_t *)__ldg((uint64_t *)&sq->wq.buf);
 	queue_mask = __ldg(&sq->wq.queue_mask);
-	wqe_size = __ldg(&sq->wqe_size);
+	wqe_size = __ldg(&sq->wr_ctx.wqe_size);
 
 	EFA_SET(&meta->ctrl2, EFA_IO_TX_META_DESC_PHASE, wqe_phase);
 
