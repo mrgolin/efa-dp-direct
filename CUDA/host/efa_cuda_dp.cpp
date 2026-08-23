@@ -9,6 +9,7 @@
 
 #include "efa_cuda_dp.h"
 #include "efa_cuda_dp_types.h"
+#include "efa_io_defs.h"
 
 static bool is_buf_cleared(void *buf, size_t len)
 {
@@ -48,6 +49,27 @@ int efa_cuda_init_cq(struct efa_cuda_cq *cq, struct efa_cuda_cq_attrs *attrs, ui
 	return 0;
 }
 
+static void efa_cuda_init_sq_wr_ctx(struct efa_cuda_wr_ctx *ctx, struct efa_cuda_qp_attrs *attrs)
+{
+	ctx->max_inline_data = attrs->sq_max_inline_data;
+	ctx->max_rdma_sges = attrs->sq_max_rdma_sges;
+	ctx->wqe_size = attrs->sq_entry_size;
+
+	if (attrs->sq_entry_size == sizeof(struct efa_io_tx_wqe_128)) {
+		ctx->remote_mem_offset = offsetof(struct efa_io_tx_wqe_128, data.rdma_req.remote_mem);
+		ctx->local_mem_offset = offsetof(struct efa_io_tx_wqe_128, data.rdma_req.local_mem);
+		ctx->sgl_offset = offsetof(struct efa_io_tx_wqe_128, data.sgl);
+		ctx->send_inline_data_offset = offsetof(struct efa_io_tx_wqe_128, data.inline_data);
+		ctx->write_inline_data_offset = offsetof(struct efa_io_tx_wqe_128, data.rdma_req.inline_data);
+	} else {
+		ctx->remote_mem_offset = offsetof(struct efa_io_tx_wqe, data.rdma_req.remote_mem);
+		ctx->local_mem_offset = offsetof(struct efa_io_tx_wqe, data.rdma_req.local_mem);
+		ctx->sgl_offset = offsetof(struct efa_io_tx_wqe, data.sgl);
+		ctx->send_inline_data_offset = offsetof(struct efa_io_tx_wqe, data.inline_data);
+		ctx->write_inline_data_offset = 0; /* 64B WQE does not support RDMA write inline */
+	}
+}
+
 int efa_cuda_init_qp(struct efa_cuda_qp *qp, struct efa_cuda_qp_attrs *attrs, uint32_t inlen)
 {
 	if ((inlen > sizeof(*attrs) && !is_ext_cleared(attrs, inlen)) ||
@@ -70,9 +92,8 @@ int efa_cuda_init_qp(struct efa_cuda_qp *qp, struct efa_cuda_qp_attrs *attrs, ui
 	qp->sq.wq.max_batch = attrs->sq_max_batch;
 	qp->sq.wq.queue_mask = attrs->sq_num_entries - 1;
 	qp->sq.wq.queue_size_shift = __builtin_ctz(attrs->sq_num_entries);
-	qp->sq.max_inline_data = attrs->sq_max_inline_data;
-	qp->sq.max_rdma_sges = attrs->sq_max_rdma_sges;
-	qp->sq.wqe_size = attrs->sq_entry_size;
+
+	efa_cuda_init_sq_wr_ctx(&qp->sq.wr_ctx, attrs);
 
 	qp->rq.wq.buf = attrs->rq_buffer;
 	qp->rq.wq.db = attrs->rq_doorbell;
