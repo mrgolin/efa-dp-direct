@@ -87,19 +87,31 @@ __device__ uint32_t efa_cuda_wc_read_src_qp(void *wc_buf);
 __device__ uint32_t efa_cuda_wc_read_slid(void *wc_buf);
 ```
 
-#### Work Request Initialization and Configuration
+#### Work Request Builder
 ```cuda
-__device__ int efa_cuda_init_send_wr(void *wr_buf, uint16_t wr_id);
-__device__ int efa_cuda_init_send_imm_wr(void *wr_buf, uint16_t wr_id, uint32_t imm_data);
-__device__ int efa_cuda_init_rdma_read_wr(void *wr_buf, uint16_t wr_id, uint32_t rkey, uint64_t remote_addr);
-__device__ int efa_cuda_init_rdma_write_wr(void *wr_buf, uint16_t wr_id, uint32_t rkey, uint64_t remote_addr);
-__device__ int efa_cuda_init_rdma_write_imm_wr(void *wr_buf, uint16_t wr_id, uint32_t rkey, uint64_t remote_addr, uint32_t imm_data);
+class EfaCudaWrBuilder {
+public:
+    __device__ EfaCudaWrBuilder(struct efa_cuda_wr_ctx *wr_ctx, uint8_t *wr_buf);
 
-__device__ void efa_cuda_wr_set_remote(void *wr_buf, uint16_t ah, uint32_t remote_qpn, uint32_t remote_qkey);
-__device__ int efa_cuda_wr_set_inline_data(void *wr_buf, void *addr, size_t length);
-__device__ int efa_cuda_wr_set_sge(void *wr_buf, uint32_t lkey, uint64_t addr, uint32_t length);
-__device__ void efa_cuda_wr_set_processing_hints(void *wr_buf, uint32_t hints);
+    // Initialization methods
+    __device__ int init_send(uint16_t wr_id);
+    __device__ int init_send_imm(uint16_t wr_id, uint32_t imm_data);
+    __device__ int init_rdma_write(uint16_t wr_id, uint32_t rkey, uint64_t remote_addr);
+    __device__ int init_rdma_write_imm(uint16_t wr_id, uint32_t rkey, uint64_t remote_addr, uint32_t imm_data);
+    __device__ int init_rdma_read(uint16_t wr_id, uint32_t rkey, uint64_t remote_addr);
+
+    // Field setters
+    __device__ int set_sge(uint32_t lkey, uint64_t addr, uint32_t length);
+    __device__ void set_remote(uint16_t ah, uint32_t remote_qpn, uint32_t remote_qkey);
+    __device__ int set_inline_data(void *addr, size_t length);
+    __device__ void set_processing_hints(uint32_t hints);
+};
 ```
+
+The builder binds a WR context (`efa_cuda_wr_ctx`) and a local WR buffer at
+construction time. All methods read WQE format information (offsets, sizes) from
+the WR context via the read-only cache, making WR construction fully agnostic to
+the WQE size (64B, 128B, etc.).
 
 #### Work Queue Operations
 ```cuda
@@ -165,19 +177,18 @@ __global__ void check_compatibility_kernel(efa_cuda_cq *cq, efa_cuda_qp *qp) {
 ### Basic Send Operation
 ```cuda
 __global__ void send_kernel(efa_cuda_qp *qp, efa_cuda_cq *cq, void *data, size_t len) {
-    // Initialize send work request
-    efa_io_tx_wqe wr_buf;
-    efa_cuda_init_send_wr(&wr_buf, 1); // req_id = 1
+    // Allocate local WR buffer
+    uint8_t wr_buf[128]; // sized to max WQE
 
-    // Set scatter-gather element
-    efa_cuda_wr_set_sge(&wr_buf, lkey, (uint64_t)data, len);
-
-    // Set remote info
-    efa_cuda_wr_set_remote(&wr_buf, ah, remote_qpn, qkey);
+    // Build work request using the builder
+    EfaCudaWrBuilder wr(&qp->sq.wr_ctx, wr_buf);
+    wr.init_send(1); // req_id = 1
+    wr.set_sge(lkey, (uint64_t)data, len);
+    wr.set_remote(ah, remote_qpn, qkey);
 
     // Post work request
     efa_cuda_start_sq_batch(qp, 1);
-    efa_cuda_sq_batch_place_wr(qp, 0, &wr_buf);
+    efa_cuda_sq_batch_place_wr(qp, 0, wr_buf);
     efa_cuda_flush_sq_wrs(qp);
 
     // Poll for completion
@@ -201,17 +212,15 @@ __global__ void send_kernel(efa_cuda_qp *qp, efa_cuda_cq *cq, void *data, size_t
 __global__ void rdma_write_imm_kernel(efa_cuda_qp *qp, void *local_data,
                                        uint64_t remote_addr, uint32_t rkey,
                                        uint32_t imm_data, size_t len) {
-    efa_io_tx_wqe wr_buf;
+    uint8_t wr_buf[128];
 
-    // Initialize RDMA write with immediate
-    efa_cuda_init_rdma_write_imm_wr(&wr_buf, 2, rkey, remote_addr, imm_data);
-
-    // Set local data
-    efa_cuda_wr_set_sge(&wr_buf, local_lkey, (uint64_t)local_data, len);
+    EfaCudaWrBuilder wr(&qp->sq.wr_ctx, wr_buf);
+    wr.init_rdma_write_imm(2, rkey, remote_addr, imm_data);
+    wr.set_sge(local_lkey, (uint64_t)local_data, len);
 
     // Post and flush
     efa_cuda_start_sq_batch(qp, 1);
-    efa_cuda_sq_batch_place_wr(qp, 0, &wr_buf);
+    efa_cuda_sq_batch_place_wr(qp, 0, wr_buf);
     efa_cuda_flush_sq_wrs(qp);
 }
 ```
@@ -258,13 +267,14 @@ __global__ void parallel_send_kernel(efa_cuda_qp *qp, void **data_ptrs, size_t *
 
     if (tid < num_requests) {
         // Each thread prepares its own work request
-        efa_io_tx_wqe wr_buf;
-        efa_cuda_init_send_wr(&wr_buf, tid);
-        efa_cuda_wr_set_sge(&wr_buf, lkey, (uint64_t)data_ptrs[tid], lengths[tid]);
-        efa_cuda_wr_set_remote(&wr_buf, ah, remote_qpn, qkey);
+        uint8_t wr_buf[128];
+        EfaCudaWrBuilder wr(&qp->sq.wr_ctx, wr_buf);
+        wr.init_send(tid);
+        wr.set_sge(lkey, (uint64_t)data_ptrs[tid], lengths[tid]);
+        wr.set_remote(ah, remote_qpn, qkey);
 
         // Place work request at thread's position in batch
-        efa_cuda_sq_batch_place_wr(qp, tid, &wr_buf);
+        efa_cuda_sq_batch_place_wr(qp, tid, wr_buf);
     }
 
     __syncthreads();
@@ -356,8 +366,8 @@ For direct inline usage in CUDA kernels, include `efa_cuda_dp_impl.cuh` directly
 
 ### Hardware Constraints
 - **Batch size limits**: Send queue batches limited by `sq_max_batch` parameter that is an EFA device property
-- **Inline data limit**: Maximum 32 bytes inline data per work request
-- **SGE limits**: Limited number of scatter-gather elements per work request
+- **Inline data limit**: Maximum inline data per work request depends on WQE size (32 bytes for 64B WQE, 80 bytes for 128B WQE)
+- **SGE limits**: Number of scatter-gather elements per work request
 - **Completion queue sizing**: CQ must accommodate all outstanding work requests
 
 ### API Behavior
