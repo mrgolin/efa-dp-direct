@@ -45,6 +45,12 @@ struct efa_cuda_cq_attrs {
     uint32_t entry_size;    // Size of each CQ entry in bytes
 };
 
+```cpp
+enum efa_cuda_wq_caps {
+    EFA_CUDA_WQ_CAPS_64_BIT_REQ_ID = 1 << 0, // WQ supports 64-bit request IDs
+};
+```
+
 struct efa_cuda_qp_attrs {
     uint64_t comp_mask;         // Reserved for future use
     uint64_t flags;             // Reserved for future use
@@ -59,9 +65,14 @@ struct efa_cuda_qp_attrs {
     uint32_t rq_entry_size;     // Receive queue entry size
     uint32_t sq_max_inline_data;// Maximum inline data size in send queue
     uint32_t sq_max_rdma_sges;  // Maximum SGEs for RDMA operations
-    uint32_t reserved;          // Must be zero
+    uint32_t sq_wq_caps;        // Send queue capabilities (see efa_cuda_wq_caps)
+    uint32_t rq_wq_caps;        // Receive queue capabilities (see efa_cuda_wq_caps)
 };
 ```
+
+`efa_cuda_init_qp` requires the send queue to advertise
+`EFA_CUDA_WQ_CAPS_64_BIT_REQ_ID` (the library posts 64-bit request IDs) and
+fails with `-EOPNOTSUPP` otherwise.
 
 **Note**: The `inlen` parameter enables compatibility checking - use `sizeof(attrs)` to allow the library to validate extended fields are zero.
 
@@ -77,7 +88,7 @@ __device__ int efa_cuda_cq_pop(efa_cuda_cq *cq, int amount);
 ```cuda
 __device__ enum efa_cuda_wc_opcode efa_cuda_wc_read_opcode(void *wc_buf);
 __device__ bool efa_cuda_wc_is_unsolicited(void *wc_buf);
-__device__ uint16_t efa_cuda_wc_read_req_id(void *wc_buf);
+__device__ uint64_t efa_cuda_wc_read_req_id(void *wc_buf);
 __device__ uint32_t efa_cuda_wc_read_vendor_err(void *wc_buf);
 __device__ bool efa_cuda_wc_has_imm(void *wc_buf);
 __device__ uint32_t efa_cuda_wc_read_imm_data(void *wc_buf);
@@ -94,11 +105,11 @@ public:
     __device__ EfaCudaWrBuilder(struct efa_cuda_wr_ctx *wr_ctx, uint8_t *wr_buf);
 
     // Initialization methods
-    __device__ int init_send(uint16_t wr_id);
-    __device__ int init_send_imm(uint16_t wr_id, uint32_t imm_data);
-    __device__ int init_rdma_write(uint16_t wr_id, uint32_t rkey, uint64_t remote_addr);
-    __device__ int init_rdma_write_imm(uint16_t wr_id, uint32_t rkey, uint64_t remote_addr, uint32_t imm_data);
-    __device__ int init_rdma_read(uint16_t wr_id, uint32_t rkey, uint64_t remote_addr);
+    __device__ int init_send(uint64_t wr_id);
+    __device__ int init_send_imm(uint64_t wr_id, uint32_t imm_data);
+    __device__ int init_rdma_write(uint64_t wr_id, uint32_t rkey, uint64_t remote_addr);
+    __device__ int init_rdma_write_imm(uint64_t wr_id, uint32_t rkey, uint64_t remote_addr, uint32_t imm_data);
+    __device__ int init_rdma_read(uint64_t wr_id, uint32_t rkey, uint64_t remote_addr);
 
     // Field setters
     __device__ int set_sge(uint32_t lkey, uint64_t addr, uint32_t length);

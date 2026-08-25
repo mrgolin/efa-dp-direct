@@ -72,8 +72,7 @@ static void efa_cuda_init_sq_wr_ctx(struct efa_cuda_wr_ctx *ctx, struct efa_cuda
 
 int efa_cuda_init_qp(struct efa_cuda_qp *qp, struct efa_cuda_qp_attrs *attrs, uint32_t inlen)
 {
-	if ((inlen > sizeof(*attrs) && !is_ext_cleared(attrs, inlen)) ||
-	    attrs->reserved) {
+	if ((inlen > sizeof(*attrs) && !is_ext_cleared(attrs, inlen))) {
 		printf("Incompatible attributes struct\n");
 		return -EINVAL;
 	}
@@ -82,6 +81,21 @@ int efa_cuda_init_qp(struct efa_cuda_qp *qp, struct efa_cuda_qp_attrs *attrs, ui
 	    __builtin_popcount(attrs->rq_num_entries) != 1) {
 		printf("SQ and RQ sizes must be positive powers of 2\n");
 		return -EINVAL;
+	}
+
+	if (attrs->sq_wq_caps & ~EFA_CUDA_WQ_CAPS_64_BIT_REQ_ID) {
+		printf("Unexpected SQ capabilities: 0x%x\n", attrs->sq_wq_caps);
+		return -EOPNOTSUPP;
+	}
+
+	if (!(attrs->sq_wq_caps & EFA_CUDA_WQ_CAPS_64_BIT_REQ_ID)) {
+		printf("SQ must support 64-bit request IDs\n");
+		return -EOPNOTSUPP;
+	}
+
+	if (attrs->rq_wq_caps) {
+		printf("Unexpected RQ capabilities: 0x%x\n", attrs->rq_wq_caps);
+		return -EOPNOTSUPP;
 	}
 
 	memset(qp, 0, sizeof(*qp));

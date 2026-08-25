@@ -113,11 +113,14 @@ __device__ static inline bool efa_cuda_wc_is_unsolicited(void *wc_buf)
 	return EFA_GET(&cqe->flags, EFA_IO_CDESC_COMMON_UNSOLICITED);
 }
 
-__device__ static inline uint16_t efa_cuda_wc_read_req_id(void *wc_buf)
+__device__ static inline uint64_t efa_cuda_wc_read_req_id(void *wc_buf)
 {
-	struct efa_io_cdesc_common *cqe = (struct efa_io_cdesc_common *)wc_buf;
+	struct efa_io_tx_cdesc *tcqe = (struct efa_io_tx_cdesc *)wc_buf;
 
-	return cqe->req_id;
+	return (uint64_t)tcqe->common.req_id |
+	       (uint64_t)tcqe->req_id_ex.w[0] << 16 |
+	       (uint64_t)tcqe->req_id_ex.w[1] << 32 |
+	       (uint64_t)tcqe->req_id_ex.w[2] << 48;
 }
 
 __device__ static inline uint32_t efa_cuda_wc_read_vendor_err(void *wc_buf)
@@ -214,7 +217,7 @@ private:
 		EFA_SET(&md->ctrl1, EFA_IO_TX_META_DESC_HAS_IMM, 1);
 	}
 
-	__device__ inline int init_wr(enum efa_io_send_op_type op_type, uint16_t wr_id)
+	__device__ inline int init_wr(enum efa_io_send_op_type op_type, uint64_t wr_id)
 	{
 		uint16_t wqe_size = __ldg(&wr_ctx->wqe_size);
 		uint64_t *dst = (uint64_t *)wr_buf;
@@ -228,7 +231,10 @@ private:
 		EFA_SET(&md->ctrl2, EFA_IO_TX_META_DESC_LAST, 1);
 		EFA_SET(&md->ctrl2, EFA_IO_TX_META_DESC_COMP_REQ, 1);
 
-		md->req_id = wr_id;
+		md->req_id = (uint16_t)wr_id;
+		md->req_id_ex.w[0] = (uint16_t)(wr_id >> 16);
+		md->req_id_ex.w[1] = (uint16_t)(wr_id >> 32);
+		md->req_id_ex.w[2] = (uint16_t)(wr_id >> 48);
 
 		return 0;
 	}
@@ -238,12 +244,12 @@ public:
 		: wr_ctx(wr_ctx), wr_buf(wr_buf),
 		  md((struct efa_io_tx_meta_desc *)wr_buf) {}
 
-	__device__ inline int init_send(uint16_t wr_id)
+	__device__ inline int init_send(uint64_t wr_id)
 	{
 		return init_wr(EFA_IO_SEND, wr_id);
 	}
 
-	__device__ inline int init_send_imm(uint16_t wr_id, uint32_t imm_data)
+	__device__ inline int init_send_imm(uint64_t wr_id, uint32_t imm_data)
 	{
 		int ret = init_wr(EFA_IO_SEND, wr_id);
 		if (ret)
@@ -253,7 +259,7 @@ public:
 		return 0;
 	}
 
-	__device__ inline int init_rdma_write(uint16_t wr_id, uint32_t rkey, uint64_t remote_addr)
+	__device__ inline int init_rdma_write(uint64_t wr_id, uint32_t rkey, uint64_t remote_addr)
 	{
 		int ret = init_wr(EFA_IO_RDMA_WRITE, wr_id);
 		if (ret)
@@ -263,7 +269,7 @@ public:
 		return 0;
 	}
 
-	__device__ inline int init_rdma_write_imm(uint16_t wr_id, uint32_t rkey,
+	__device__ inline int init_rdma_write_imm(uint64_t wr_id, uint32_t rkey,
 						  uint64_t remote_addr, uint32_t imm_data)
 	{
 		int ret = init_rdma_write(wr_id, rkey, remote_addr);
@@ -274,7 +280,7 @@ public:
 		return 0;
 	}
 
-	__device__ inline int init_rdma_read(uint16_t wr_id, uint32_t rkey, uint64_t remote_addr)
+	__device__ inline int init_rdma_read(uint64_t wr_id, uint32_t rkey, uint64_t remote_addr)
 	{
 		int ret = init_wr(EFA_IO_RDMA_READ, wr_id);
 		if (ret)
