@@ -6,9 +6,9 @@
 
 #include <stdint.h>
 
-#define EFA_CUDA_DP_VERSION_MAJOR 0
+#define EFA_CUDA_DP_VERSION_MAJOR 1
 #define EFA_CUDA_DP_VERSION_MINOR 0
-#define EFA_CUDA_DP_VERSION_SUBMINOR 2
+#define EFA_CUDA_DP_VERSION_SUBMINOR 0
 
 struct efa_cuda_cq {
 	uint64_t comp_mask;
