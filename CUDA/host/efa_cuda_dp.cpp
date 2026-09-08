@@ -1,43 +1,106 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 
-#include <stdio.h>
 #include <errno.h>
+#include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
-#include <cuda_runtime.h>
 
 #include "efa_cuda_dp.h"
-#include "efa_cuda_dp_types.h"
-#include "efa_io_defs.h"
+#include "../common/efa_cuda_dp_types.h"
+#include "../device/efa_io_defs.h"
 
-static bool is_buf_cleared(void *buf, size_t len)
+static_assert(sizeof(struct efa_cuda_cq_v0) == 48, "major 0 CQ layout changed");
+static_assert(sizeof(struct efa_cuda_qp_v0) == 128, "major 0 QP layout changed");
+static_assert(sizeof(struct efa_cuda_qp_v1) == 144, "major 1 QP layout changed");
+
+#define EFA_CUDA_LOG_ERR(...)                                                                      \
+	do {                                                                                       \
+		fprintf(stderr, "efa_cuda_dp: ");                                                  \
+		fprintf(stderr, __VA_ARGS__);                                                      \
+		fprintf(stderr, "\n");                                                             \
+	} while (0)
+
+#define EFA_CUDA_WQE_SIZE_64 sizeof(struct efa_io_tx_wqe)
+#define EFA_CUDA_WQE_SIZE_128 sizeof(struct efa_io_tx_wqe_128)
+
+#define efa_field_avail(type, field, inlen)                                                        \
+	(offsetof(type, field) + sizeof(((type *)0)->field) <= (inlen))
+
+#define efa_qp_attr_or_zero(attrs, field, inlen)                                                   \
+	(efa_field_avail(struct efa_cuda_qp_attrs, field, inlen) ? (attrs)->field : 0)
+
+static bool efa_attrs_ext_is_cleared(const void *attrs, size_t attrs_size, uint32_t inlen)
 {
+	const uint8_t *ext;
 	size_t i;
 
-	for (i = 0; i < len; i++) {
-		if (((uint8_t *)buf)[i])
+	if (inlen <= attrs_size)
+		return true;
+
+	ext = (const uint8_t *)attrs + attrs_size;
+	for (i = 0; i < inlen - attrs_size; i++) {
+		if (ext[i])
 			return false;
 	}
 
 	return true;
 }
 
-#define is_ext_cleared(ptr, inlen) \
-	is_buf_cleared((uint8_t *)ptr + sizeof(*ptr), inlen - sizeof(*ptr))
+#define efa_ext_is_cleared(attrs, inlen) efa_attrs_ext_is_cleared(attrs, sizeof(*(attrs)), inlen)
 
-int efa_cuda_init_cq(struct efa_cuda_cq *cq, struct efa_cuda_cq_attrs *attrs, uint32_t inlen)
+static int efa_check_buf_size(uint32_t buf_size, size_t required)
 {
-	if (inlen > sizeof(*attrs) && !is_ext_cleared(attrs, inlen)) {
-		printf("Incompatible attributes struct\n");
+	if (buf_size < required) {
+		EFA_CUDA_LOG_ERR("storage is %u bytes but this version's layout needs %zu",
+				 buf_size, required);
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
+static int efa_check_cq_attrs(const struct efa_cuda_cq_attrs *attrs, uint32_t inlen)
+{
+	if (!attrs)
+		return -EINVAL;
+
+	if (!efa_field_avail(struct efa_cuda_cq_attrs, entry_size, inlen)) {
+		EFA_CUDA_LOG_ERR("CQ attributes too short: %u bytes", inlen);
+		return -EINVAL;
+	}
+
+	if (!efa_ext_is_cleared(attrs, inlen)) {
+		EFA_CUDA_LOG_ERR("CQ attributes carry fields this build cannot honour");
 		return -EINVAL;
 	}
 
 	if (__builtin_popcount(attrs->num_entries) != 1) {
-		printf("CQ size must be positive power of 2\n");
+		EFA_CUDA_LOG_ERR("CQ size must be a positive power of 2, got %u",
+				 attrs->num_entries);
 		return -EINVAL;
 	}
 
+	return 0;
+}
+
+static int efa_init_cq_v0(void *cq_buf, uint32_t cq_buf_size, const struct efa_cuda_cq_attrs *attrs,
+			  uint32_t inlen)
+{
+	struct efa_cuda_cq_v0 *cq;
+	int ret;
+
+	ret = efa_check_buf_size(cq_buf_size, sizeof(*cq));
+	if (ret)
+		return ret;
+
+	ret = efa_check_cq_attrs(attrs, inlen);
+	if (ret)
+		return ret;
+
+	cq = (struct efa_cuda_cq_v0 *)cq_buf;
 	memset(cq, 0, sizeof(*cq));
 	cq->buf = attrs->buffer;
 	cq->entry_size = attrs->entry_size;
@@ -49,13 +112,96 @@ int efa_cuda_init_cq(struct efa_cuda_cq *cq, struct efa_cuda_cq_attrs *attrs, ui
 	return 0;
 }
 
-static void efa_cuda_init_sq_wr_ctx(struct efa_cuda_wr_ctx *ctx, struct efa_cuda_qp_attrs *attrs)
+static int efa_check_qp_attrs(const struct efa_cuda_qp_attrs *attrs, uint32_t inlen)
+{
+	if (!attrs)
+		return -EINVAL;
+
+	if (!efa_field_avail(struct efa_cuda_qp_attrs, rq_entry_size, inlen)) {
+		EFA_CUDA_LOG_ERR("QP attributes too short: %u bytes", inlen);
+		return -EINVAL;
+	}
+
+	if (!efa_ext_is_cleared(attrs, inlen)) {
+		EFA_CUDA_LOG_ERR("QP attributes carry fields this build cannot honour");
+		return -EINVAL;
+	}
+
+	if (__builtin_popcount(attrs->sq_num_entries) != 1 ||
+	    __builtin_popcount(attrs->rq_num_entries) != 1) {
+		EFA_CUDA_LOG_ERR("SQ and RQ sizes must be positive powers of 2, got %u and %u",
+				 attrs->sq_num_entries, attrs->rq_num_entries);
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
+static void efa_init_wq_v0(struct efa_cuda_wq_v0 *wq, uint8_t *buf, uint32_t *db,
+			   uint32_t num_entries, uint32_t max_batch, int phase)
+{
+	wq->buf = buf;
+	wq->db = db;
+	wq->max_wqes = num_entries;
+	wq->max_batch = max_batch;
+	wq->queue_mask = num_entries - 1;
+	wq->queue_size_shift = __builtin_ctz(num_entries);
+	wq->phase = phase;
+}
+
+static int efa_init_qp_v0(void *qp_buf, uint32_t qp_buf_size, const struct efa_cuda_qp_attrs *attrs,
+			  uint32_t inlen)
+{
+	uint32_t sq_max_inline_data = efa_qp_attr_or_zero(attrs, sq_max_inline_data, inlen);
+	uint32_t sq_max_rdma_sges = efa_qp_attr_or_zero(attrs, sq_max_rdma_sges, inlen);
+	uint32_t sq_wq_caps = efa_qp_attr_or_zero(attrs, sq_wq_caps, inlen);
+	uint32_t rq_wq_caps = efa_qp_attr_or_zero(attrs, rq_wq_caps, inlen);
+	struct efa_cuda_qp_v0 *qp;
+	int ret;
+
+	ret = efa_check_buf_size(qp_buf_size, sizeof(*qp));
+	if (ret)
+		return ret;
+
+	ret = efa_check_qp_attrs(attrs, inlen);
+	if (ret)
+		return ret;
+
+	if (attrs->sq_entry_size != EFA_CUDA_WQE_SIZE_64) {
+		EFA_CUDA_LOG_ERR("major 0 supports only a %zu byte send WQE, got %u",
+				 EFA_CUDA_WQE_SIZE_64, attrs->sq_entry_size);
+		return -EOPNOTSUPP;
+	}
+
+	if (sq_wq_caps || rq_wq_caps) {
+		EFA_CUDA_LOG_ERR("major 0 supports no work queue capabilities, got SQ 0x%x "
+				 "RQ 0x%x",
+				 sq_wq_caps, rq_wq_caps);
+		return -EOPNOTSUPP;
+	}
+
+	qp = (struct efa_cuda_qp_v0 *)qp_buf;
+	memset(qp, 0, sizeof(*qp));
+
+	efa_init_wq_v0(&qp->sq.wq, attrs->sq_buffer, attrs->sq_doorbell, attrs->sq_num_entries,
+		       attrs->sq_max_batch, 0);
+	qp->sq.max_inline_data = sq_max_inline_data;
+	qp->sq.max_rdma_sges = sq_max_rdma_sges;
+
+	efa_init_wq_v0(&qp->rq.wq, attrs->rq_buffer, attrs->rq_doorbell, attrs->rq_num_entries,
+		       attrs->rq_num_entries, 1);
+
+	return 0;
+}
+
+static void efa_init_sq_wr_ctx_v0(struct efa_cuda_wr_ctx_v0 *ctx,
+				  const struct efa_cuda_qp_attrs *attrs)
 {
 	ctx->max_inline_data = attrs->sq_max_inline_data;
 	ctx->max_rdma_sges = attrs->sq_max_rdma_sges;
 	ctx->wqe_size = attrs->sq_entry_size;
 
-	if (attrs->sq_entry_size == sizeof(struct efa_io_tx_wqe_128)) {
+	if (attrs->sq_entry_size == EFA_CUDA_WQE_SIZE_128) {
 		ctx->remote_mem_offset = offsetof(struct efa_io_tx_wqe_128, data.rdma_req.remote_mem);
 		ctx->local_mem_offset = offsetof(struct efa_io_tx_wqe_128, data.rdma_req.local_mem);
 		ctx->sgl_offset = offsetof(struct efa_io_tx_wqe_128, data.sgl);
@@ -70,123 +216,156 @@ static void efa_cuda_init_sq_wr_ctx(struct efa_cuda_wr_ctx *ctx, struct efa_cuda
 	}
 }
 
-int efa_cuda_init_qp(struct efa_cuda_qp *qp, struct efa_cuda_qp_attrs *attrs, uint32_t inlen)
+static int efa_init_qp_v1(void *qp_buf, uint32_t qp_buf_size, const struct efa_cuda_qp_attrs *attrs,
+			  uint32_t inlen)
 {
-	if ((inlen > sizeof(*attrs) && !is_ext_cleared(attrs, inlen))) {
-		printf("Incompatible attributes struct\n");
-		return -EINVAL;
-	}
+	struct efa_cuda_qp_v1 *qp;
+	int ret;
 
-	if (__builtin_popcount(attrs->sq_num_entries) != 1 ||
-	    __builtin_popcount(attrs->rq_num_entries) != 1) {
-		printf("SQ and RQ sizes must be positive powers of 2\n");
-		return -EINVAL;
-	}
+	ret = efa_check_buf_size(qp_buf_size, sizeof(*qp));
+	if (ret)
+		return ret;
 
-	if (attrs->sq_wq_caps & ~EFA_CUDA_WQ_CAPS_64_BIT_REQ_ID) {
-		printf("Unexpected SQ capabilities: 0x%x\n", attrs->sq_wq_caps);
+	ret = efa_check_qp_attrs(attrs, inlen);
+	if (ret)
+		return ret;
+
+	if (attrs->sq_entry_size != EFA_CUDA_WQE_SIZE_64 &&
+	    attrs->sq_entry_size != EFA_CUDA_WQE_SIZE_128) {
+		EFA_CUDA_LOG_ERR("send WQE size must be %zu or %zu bytes, got %u",
+				 EFA_CUDA_WQE_SIZE_64, EFA_CUDA_WQE_SIZE_128,
+				 attrs->sq_entry_size);
 		return -EOPNOTSUPP;
 	}
 
+	if (!efa_field_avail(struct efa_cuda_qp_attrs, rq_wq_caps, inlen)) {
+		EFA_CUDA_LOG_ERR("QP attributes too short for major 1: %u bytes", inlen);
+		return -EOPNOTSUPP;
+	}
+
+	if (attrs->sq_wq_caps & ~(uint32_t)EFA_CUDA_WQ_CAPS_64_BIT_REQ_ID) {
+		EFA_CUDA_LOG_ERR("unexpected SQ capabilities 0x%x", attrs->sq_wq_caps);
+		return -EOPNOTSUPP;
+	}
+
+	/* Device code posts 64-bit request IDs unconditionally. */
 	if (!(attrs->sq_wq_caps & EFA_CUDA_WQ_CAPS_64_BIT_REQ_ID)) {
-		printf("SQ must support 64-bit request IDs\n");
+		EFA_CUDA_LOG_ERR("SQ must support 64-bit request IDs");
 		return -EOPNOTSUPP;
 	}
 
 	if (attrs->rq_wq_caps) {
-		printf("Unexpected RQ capabilities: 0x%x\n", attrs->rq_wq_caps);
+		EFA_CUDA_LOG_ERR("unexpected RQ capabilities 0x%x", attrs->rq_wq_caps);
 		return -EOPNOTSUPP;
 	}
 
+	qp = (struct efa_cuda_qp_v1 *)qp_buf;
 	memset(qp, 0, sizeof(*qp));
 
-	qp->sq.wq.buf = attrs->sq_buffer;
-	qp->sq.wq.db = attrs->sq_doorbell;
-	qp->sq.wq.max_wqes = attrs->sq_num_entries;
-	qp->sq.wq.max_batch = attrs->sq_max_batch;
-	qp->sq.wq.queue_mask = attrs->sq_num_entries - 1;
-	qp->sq.wq.queue_size_shift = __builtin_ctz(attrs->sq_num_entries);
+	efa_init_wq_v0(&qp->sq.wq, attrs->sq_buffer, attrs->sq_doorbell, attrs->sq_num_entries,
+		       attrs->sq_max_batch, 0);
+	efa_init_sq_wr_ctx_v0(&qp->sq.wr_ctx, attrs);
 
-	efa_cuda_init_sq_wr_ctx(&qp->sq.wr_ctx, attrs);
-
-	qp->rq.wq.buf = attrs->rq_buffer;
-	qp->rq.wq.db = attrs->rq_doorbell;
-	qp->rq.wq.max_wqes = attrs->rq_num_entries;
-	qp->rq.wq.max_batch = attrs->rq_num_entries;
-	qp->rq.wq.queue_mask = attrs->rq_num_entries - 1;
-	qp->rq.wq.queue_size_shift = __builtin_ctz(attrs->rq_num_entries);
-	qp->rq.wq.phase = 1;
+	efa_init_wq_v0(&qp->rq.wq, attrs->rq_buffer, attrs->rq_doorbell, attrs->rq_num_entries,
+		       attrs->rq_num_entries, 1);
 
 	return 0;
 }
+/*
+ * ---------------------------------------------------------------------------
+ * Context
+ * ---------------------------------------------------------------------------
+ */
 
-struct efa_cuda_cq *efa_cuda_create_cq(struct efa_cuda_cq_attrs *attrs, uint32_t inlen)
+struct efa_cuda_host_context {
+	int major;
+	int minor;
+	int subminor;
+};
+
+struct efa_cuda_host_context *efa_cuda_host_context_create(int major, int minor, int subminor)
 {
-	cudaError_t cuda_err;
-	efa_cuda_cq *d_cq;
-	efa_cuda_cq h_cq;
-	int ret;
+	struct efa_cuda_host_context *ctx;
 
-	ret = efa_cuda_init_cq(&h_cq, attrs, inlen);
-	if (ret)
-		return nullptr;
-
-	cuda_err = cudaMalloc(&d_cq, sizeof(efa_cuda_cq));
-	if (cuda_err != cudaSuccess) {
-		printf("Failed to allocate device memory for cq: %s\n",
-		       cudaGetErrorString(cuda_err));
-		return nullptr;
+	if (major < 0 || major > EFA_CUDA_DP_VERSION_MAJOR) {
+		EFA_CUDA_LOG_ERR("unsupported major version %d", major);
+		return NULL;
 	}
 
-	cuda_err = cudaMemcpy(d_cq, &h_cq, sizeof(efa_cuda_cq), cudaMemcpyHostToDevice);
-	if (cuda_err != cudaSuccess) {
-		cudaFree(d_cq);
-		printf("Failed to copy cq to device: %s\n",
-		       cudaGetErrorString(cuda_err));
-		return nullptr;
-	}
+	ctx = (struct efa_cuda_host_context *)calloc(1, sizeof(*ctx));
+	if (!ctx)
+		return NULL;
 
-	return d_cq;
+	ctx->major = major;
+	ctx->minor = minor;
+	ctx->subminor = subminor;
+
+	return ctx;
 }
 
-void efa_cuda_destroy_cq(efa_cuda_cq *d_cq)
+void efa_cuda_host_context_destroy(struct efa_cuda_host_context *ctx)
 {
-	cudaFree(d_cq);
+	free(ctx);
 }
 
-struct efa_cuda_qp *efa_cuda_create_qp(struct efa_cuda_qp_attrs *attrs, uint32_t inlen)
+int efa_cuda_init_cq(struct efa_cuda_host_context *ctx, void *cq_buf, uint32_t cq_buf_size,
+		     const struct efa_cuda_cq_attrs *attrs, uint32_t inlen)
 {
-	cudaError_t cuda_err;
-	efa_cuda_qp *d_qp;
-	efa_cuda_qp h_qp;
-	int ret;
+	if (!ctx)
+		return -EINVAL;
 
-	ret = efa_cuda_init_qp(&h_qp, attrs, inlen);
-	if (ret)
-		return nullptr;
-
-	cuda_err = cudaMalloc(&d_qp, sizeof(efa_cuda_qp));
-	if (cuda_err != cudaSuccess) {
-		printf("Failed to allocate device memory for qp: %s\n",
-		       cudaGetErrorString(cuda_err));
-		return nullptr;
+	switch (ctx->major) {
+	case 0:
+	case 1:
+		return efa_init_cq_v0(cq_buf, cq_buf_size, attrs, inlen);
+	default:
+		return -EOPNOTSUPP;
 	}
-
-	cuda_err = cudaMemcpy(d_qp, &h_qp, sizeof(efa_cuda_qp), cudaMemcpyHostToDevice);
-	if (cuda_err != cudaSuccess) {
-		cudaFree(d_qp);
-		printf("Failed to copy qp to device: %s\n",
-		       cudaGetErrorString(cuda_err));
-		return nullptr;
-	}
-
-	return d_qp;
 }
 
-void efa_cuda_destroy_qp(struct efa_cuda_qp *d_qp)
+int efa_cuda_init_qp(struct efa_cuda_host_context *ctx, void *qp_buf, uint32_t qp_buf_size,
+		     const struct efa_cuda_qp_attrs *attrs, uint32_t inlen)
 {
-	if (d_qp)
-		cudaFree(d_qp);
+	if (!ctx)
+		return -EINVAL;
+
+	switch (ctx->major) {
+	case 0:
+		return efa_init_qp_v0(qp_buf, qp_buf_size, attrs, inlen);
+	case 1:
+		return efa_init_qp_v1(qp_buf, qp_buf_size, attrs, inlen);
+	default:
+		return -EOPNOTSUPP;
+	}
+}
+
+int efa_cuda_get_cq_size(struct efa_cuda_host_context *ctx)
+{
+	if (!ctx)
+		return -EINVAL;
+
+	switch (ctx->major) {
+	case 0:
+	case 1:
+		return sizeof(struct efa_cuda_cq_v0);
+	default:
+		return -EOPNOTSUPP;
+	}
+}
+
+int efa_cuda_get_qp_size(struct efa_cuda_host_context *ctx)
+{
+	if (!ctx)
+		return -EINVAL;
+
+	switch (ctx->major) {
+	case 0:
+		return sizeof(struct efa_cuda_qp_v0);
+	case 1:
+		return sizeof(struct efa_cuda_qp_v1);
+	default:
+		return -EOPNOTSUPP;
+	}
 }
 
 int efa_cuda_get_version(int *major, int *minor, int *subminor)
