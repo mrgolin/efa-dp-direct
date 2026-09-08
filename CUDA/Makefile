@@ -14,7 +14,7 @@ $(BUILDDIR)/libefacudadp.so: $(BUILDDIR)/efa_cuda_dp.o | $(BUILDDIR)
 
 $(BUILDDIR)/efa_cuda_dp.o: host/efa_cuda_dp.cpp host/efa_cuda_dp.h \
 			   common/efa_cuda_dp_types.h \
-			   common/efa_cuda_dp_version.h device/efa_io_defs.h | $(BUILDDIR)
+			   common/efa_cuda_dp_version.h common/efa_io_defs.h | $(BUILDDIR)
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -fPIC -c $< -o $@
 
 $(BUILDDIR)/efa_cuda_dp_test: tests/efa_cuda_dp_test.cpp $(BUILDDIR)/efa_cuda_dp.o \
