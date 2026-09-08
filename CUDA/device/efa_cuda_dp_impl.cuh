@@ -23,6 +23,8 @@ typedef decltype(((efa_cuda_qp *)0)->rq) efa_cuda_rq;
 typedef decltype(((efa_cuda_sq *)0)->wq) efa_cuda_wq;
 typedef decltype(((efa_cuda_sq *)0)->wr_ctx) efa_cuda_wr_ctx;
 
+#pragma push_macro("BIT")
+#undef BIT
 #define BIT(nr)		(1UL << (nr))
 
 #define __bf_shf(x)	(__builtin_ffsll(x) - 1)
@@ -487,5 +489,8 @@ __device__ static inline bool efa_cuda_is_qp_compatible(efa_cuda_qp *qp)
 {
 	return qp->comp_mask == 0;
 }
+
+#undef BIT
+#pragma pop_macro("BIT")
 
 #endif
