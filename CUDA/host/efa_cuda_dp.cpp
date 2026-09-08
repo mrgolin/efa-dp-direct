@@ -112,6 +112,29 @@ static int efa_init_cq_v0(void *cq_buf, uint32_t cq_buf_size, const struct efa_c
 	return 0;
 }
 
+static int efa_check_sq_limits(uint32_t wqe_size, uint32_t max_inline_data,
+			       uint32_t max_rdma_sges)
+{
+	uint32_t inline_cap = wqe_size == EFA_CUDA_WQE_SIZE_128 ?
+				      EFA_IO_TX_DESC_INLINE_MAX_SIZE_128 :
+				      EFA_IO_TX_DESC_INLINE_MAX_SIZE;
+	uint32_t rdma_sge_cap = EFA_IO_TX_DESC_NUM_RDMA_BUFS;
+
+	if (max_inline_data > inline_cap) {
+		EFA_CUDA_LOG_ERR("sq_max_inline_data %u exceeds the %u bytes a %u byte WQE holds",
+				 max_inline_data, inline_cap, wqe_size);
+		return -EINVAL;
+	}
+
+	if (max_rdma_sges > rdma_sge_cap) {
+		EFA_CUDA_LOG_ERR("sq_max_rdma_sges %u exceeds the %u a WQE holds", max_rdma_sges,
+				 rdma_sge_cap);
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
 static int efa_check_qp_attrs(const struct efa_cuda_qp_attrs *attrs, uint32_t inlen)
 {
 	if (!attrs)
@@ -134,7 +157,9 @@ static int efa_check_qp_attrs(const struct efa_cuda_qp_attrs *attrs, uint32_t in
 		return -EINVAL;
 	}
 
-	return 0;
+	return efa_check_sq_limits(attrs->sq_entry_size,
+				   efa_qp_attr_or_zero(attrs, sq_max_inline_data, inlen),
+				   efa_qp_attr_or_zero(attrs, sq_max_rdma_sges, inlen));
 }
 
 static void efa_init_wq_v0(struct efa_cuda_wq_v0 *wq, uint8_t *buf, uint32_t *db,
