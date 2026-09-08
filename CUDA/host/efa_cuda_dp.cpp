@@ -10,7 +10,7 @@
 
 #include "efa_cuda_dp.h"
 #include "../common/efa_cuda_dp_types.h"
-#include "../device/efa_io_defs.h"
+#include "../common/efa_io_defs.h"
 
 static_assert(sizeof(struct efa_cuda_cq_v0) == 48, "major 0 CQ layout changed");
 static_assert(sizeof(struct efa_cuda_qp_v0) == 128, "major 0 QP layout changed");

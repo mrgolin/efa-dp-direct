@@ -11,8 +11,8 @@
 #include <cstddef>
 
 #include "../common/efa_cuda_dp_types.h"
+#include "../common/efa_io_defs.h"
 #include "efa_cuda_dp_defs.cuh"
-#include "efa_io_defs.h"
 
 /* Update when the layout of QP/CQ changes */
 typedef struct efa_cuda_cq_v0 efa_cuda_cq;

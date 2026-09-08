@@ -12,11 +12,11 @@ This implementation provides CUDA device functions that allow GPU kernels to dir
 CUDA/
 ├── common/
 │   ├── efa_cuda_dp_types.h             # Frozen per-version QP/CQ/WQ layouts (shared by host & device)
-│   └── efa_cuda_dp_version.h           # Library version (shared by host & device)
+│   ├── efa_cuda_dp_version.h           # Library version (shared by host & device)
+│   └── efa_io_defs.h                   # EFA I/O HW structure definitions (internal)
 ├── device/
 │   ├── efa_cuda_dp_defs.cuh            # Datapath enums and device-side definitions
-│   ├── efa_cuda_dp_impl.cuh            # __device__ function implementations (include in kernels)
-│   └── efa_io_defs.h                   # EFA I/O HW structure definitions (internal)
+│   └── efa_cuda_dp_impl.cuh            # __device__ function implementations (include in kernels)
 ├── host/
 │   ├── efa_cuda_dp.h                   # C API: context, queue initializers, size queries
 │   └── efa_cuda_dp.cpp                 # Host-side implementation
