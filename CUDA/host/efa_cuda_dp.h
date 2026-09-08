@@ -4,12 +4,25 @@
 #ifndef EFA_CUDA_DP_H
 #define EFA_CUDA_DP_H
 
-#include <stddef.h>
 #include <stdint.h>
+
+#include "../common/efa_cuda_dp_version.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+/*
+ * Host-side API for efa-dp-direct.
+ *
+ * Translates the EFA queue attributes a caller obtained from the driver into the
+ * queue structures that device code reads. Those structures are a wire format
+ * between host and device: this library fills them, a GPU kernel consumes them.
+ *
+ * No CUDA header is included and no CUDA library is linked. Allocating device
+ * memory and copying the initialized structure into it are the caller's
+ * responsibility.
+ */
 
 struct efa_cuda_cq_attrs {
 	uint64_t comp_mask;
@@ -41,17 +54,21 @@ struct efa_cuda_qp_attrs {
 	uint32_t rq_wq_caps;
 };
 
-struct efa_cuda_cq;
-struct efa_cuda_qp;
+struct efa_cuda_host_context;
 
-struct efa_cuda_cq *efa_cuda_create_cq(struct efa_cuda_cq_attrs *attrs, uint32_t inlen);
-void efa_cuda_destroy_cq(struct efa_cuda_cq *d_cq);
-struct efa_cuda_qp *efa_cuda_create_qp(struct efa_cuda_qp_attrs *attrs, uint32_t inlen);
-void efa_cuda_destroy_qp(struct efa_cuda_qp *d_qp);
+struct efa_cuda_host_context *efa_cuda_host_context_create(int major, int minor, int subminor);
+void efa_cuda_host_context_destroy(struct efa_cuda_host_context *ctx);
 
-int efa_cuda_init_cq(struct efa_cuda_cq *cq, struct efa_cuda_cq_attrs *attrs, uint32_t inlen);
-int efa_cuda_init_qp(struct efa_cuda_qp *qp, struct efa_cuda_qp_attrs *attrs, uint32_t inlen);
 
+int efa_cuda_init_cq(struct efa_cuda_host_context *ctx, void *cq_buf, uint32_t cq_buf_size,
+		     const struct efa_cuda_cq_attrs *attrs, uint32_t inlen);
+int efa_cuda_init_qp(struct efa_cuda_host_context *ctx, void *qp_buf, uint32_t qp_buf_size,
+		     const struct efa_cuda_qp_attrs *attrs, uint32_t inlen);
+
+int efa_cuda_get_cq_size(struct efa_cuda_host_context *ctx);
+int efa_cuda_get_qp_size(struct efa_cuda_host_context *ctx);
+
+/* Library version. */
 int efa_cuda_get_version(int *major, int *minor, int *subminor);
 
 #ifdef __cplusplus

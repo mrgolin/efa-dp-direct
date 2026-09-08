@@ -14,6 +14,15 @@
 #include "efa_cuda_dp_defs.cuh"
 #include "efa_io_defs.h"
 
+/* Update when the layout of QP/CQ changes */
+typedef struct efa_cuda_cq_v0 efa_cuda_cq;
+typedef struct efa_cuda_qp_v1 efa_cuda_qp;
+
+typedef decltype(((efa_cuda_qp *)0)->sq) efa_cuda_sq;
+typedef decltype(((efa_cuda_qp *)0)->rq) efa_cuda_rq;
+typedef decltype(((efa_cuda_sq *)0)->wq) efa_cuda_wq;
+typedef decltype(((efa_cuda_sq *)0)->wr_ctx) efa_cuda_wr_ctx;
+
 #define BIT(nr)		(1UL << (nr))
 
 #define __bf_shf(x)	(__builtin_ffsll(x) - 1)
@@ -191,7 +200,7 @@ __device__ static inline uint32_t efa_cuda_wc_read_slid(void *wc_buf)
 
 class EfaCudaWrBuilder {
 private:
-	struct efa_cuda_wr_ctx *wr_ctx;
+	efa_cuda_wr_ctx *wr_ctx;
 	uint8_t *wr_buf;
 	struct efa_io_tx_meta_desc *md;
 
@@ -240,7 +249,7 @@ private:
 	}
 
 public:
-	__device__ EfaCudaWrBuilder(struct efa_cuda_wr_ctx *wr_ctx, uint8_t *wr_buf)
+	__device__ EfaCudaWrBuilder(efa_cuda_wr_ctx *wr_ctx, uint8_t *wr_buf)
 		: wr_ctx(wr_ctx), wr_buf(wr_buf),
 		  md((struct efa_io_tx_meta_desc *)wr_buf) {}
 

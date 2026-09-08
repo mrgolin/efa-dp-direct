@@ -11,14 +11,15 @@ This implementation provides CUDA device functions that allow GPU kernels to dir
 ```
 CUDA/
 ├── common/
-│   └── efa_cuda_dp_types.h       # QP/CQ/WQ struct definitions (shared by host & device)
+│   ├── efa_cuda_dp_types.h             # Frozen per-version QP/CQ/WQ layouts (shared by host & device)
+│   └── efa_cuda_dp_version.h           # Library version (shared by host & device)
 ├── device/
-│   ├── efa_cuda_dp_defs.cuh      # Datapath enums and device-side definitions
-│   ├── efa_cuda_dp_impl.cuh      # __device__ function implementations (include in kernels)
-│   └── efa_io_defs.h             # EFA I/O HW structure definitions (internal)
+│   ├── efa_cuda_dp_defs.cuh            # Datapath enums and device-side definitions
+│   ├── efa_cuda_dp_impl.cuh            # __device__ function implementations (include in kernels)
+│   └── efa_io_defs.h                   # EFA I/O HW structure definitions (internal)
 ├── host/
-│   ├── efa_cuda_dp.h             # C API header: attribute structs, init signatures, version
-│   └── efa_cuda_dp.cpp           # Host-side create/destroy implementations
+│   ├── efa_cuda_dp.h                   # C API: context, queue initializers, size queries
+│   └── efa_cuda_dp.cpp                 # Host-side implementation
 ├── Makefile
 └── README.md
 ```
@@ -27,14 +28,41 @@ CUDA/
 
 ### Host-Side C API (`host/efa_cuda_dp.h`)
 
-#### Queue Management
+#### Context and Queue Initialization
 ```c
-struct efa_cuda_cq *efa_cuda_create_cq(struct efa_cuda_cq_attrs *attrs, uint32_t inlen);
-void efa_cuda_destroy_cq(struct efa_cuda_cq *d_cq);
+struct efa_cuda_host_context *efa_cuda_host_context_create(int major, int minor, int subminor);
+void efa_cuda_host_context_destroy(struct efa_cuda_host_context *ctx);
 
-struct efa_cuda_qp *efa_cuda_create_qp(struct efa_cuda_qp_attrs *attrs, uint32_t inlen);
-void efa_cuda_destroy_qp(struct efa_cuda_qp *d_qp);
+int efa_cuda_init_cq(struct efa_cuda_host_context *ctx, void *cq_buf, uint32_t cq_buf_size,
+                     const struct efa_cuda_cq_attrs *attrs, uint32_t inlen);
+int efa_cuda_init_qp(struct efa_cuda_host_context *ctx, void *qp_buf, uint32_t qp_buf_size,
+                     const struct efa_cuda_qp_attrs *attrs, uint32_t inlen);
+
+int efa_cuda_get_cq_size(struct efa_cuda_host_context *ctx);
+int efa_cuda_get_qp_size(struct efa_cuda_host_context *ctx);
+
 int efa_cuda_get_version(int *major, int *minor, int *subminor);
+```
+
+A context binds the package version the consuming device code was built against.
+The initializers fill caller-provided host storage of `efa_cuda_get_cq_size()`
+/ `efa_cuda_get_qp_size()` bytes (equally, `sizeof` the matching `_v<major>`
+type from `common/efa_cuda_dp_types.h`), passed as `cq_buf_size` / `qp_buf_size`.
+The library makes no CUDA calls: allocating device memory and copying the
+initialized struct to it are the caller's job.
+
+```c
+struct efa_cuda_host_context *ctx = efa_cuda_host_context_create(1, 0, 0);
+
+int qp_size = efa_cuda_get_qp_size(ctx);
+void *h_qp = malloc(qp_size);
+efa_cuda_init_qp(ctx, h_qp, qp_size, &attrs, sizeof(attrs));
+
+/* caller-owned device placement */
+void *d_qp;
+cudaMalloc(&d_qp, qp_size);
+cudaMemcpy(d_qp, h_qp, qp_size, cudaMemcpyHostToDevice);
+free(h_qp);
 
 // Attribute structures - always zero-initialize for compatibility
 struct efa_cuda_cq_attrs {
@@ -141,23 +169,30 @@ __device__ bool efa_cuda_is_qp_compatible(efa_cuda_qp *qp);
 
 ## Version Checking and Compatibility
 
-To ensure compatibility between dynamically linked libraries and directly included CUDA implementations, the library provides two mechanisms:
+The QP/CQ structures are a wire format between the host library and the device
+code compiled into kernels, and those two ship in different binaries. The
+context is what keeps them in step: create it with the package version the
+device code was built against, and the initializers produce that version's
+layout, or fail rather than produce a different one. A caller can additionally
+verify the loaded library itself:
 
 ### 1. Library Version Checking (Host Code)
 
-Use `efa_cuda_get_version()` to verify the dynamically linked library version:
+Use `efa_cuda_get_version()` to query the dynamically linked library version:
 
 ```c
 int major, minor, subminor;
 int ret = efa_cuda_get_version(&major, &minor, &subminor);
 if (ret == 0) {
     printf("EFA CUDA DP Library Version: %d.%d.%d\n", major, minor, subminor);
+}
 
-    // Check compatibility with expected version
-    if (major != EFA_CUDA_DP_VERSION_MAJOR || minor != EFA_CUDA_DP_VERSION_MINOR) {
-        fprintf(stderr, "Incompatible library version\n");
-        return -1;
-    }
+// The device code's expected version, from common/efa_cuda_dp_version.h at its
+// build time, selects the layout:
+struct efa_cuda_host_context *ctx = efa_cuda_host_context_create(major, minor, subminor);
+if (!ctx) {
+    fprintf(stderr, "Library does not support this API version\n");
+    return -1;
 }
 ```
 
@@ -331,7 +366,8 @@ __global__ void parallel_poll_kernel(efa_cuda_cq *cq) {
 ## Build Instructions
 
 ### Prerequisites
-- NVIDIA CUDA Toolkit
+- C++ compiler (the host library has no CUDA dependency)
+- NVIDIA CUDA Toolkit (only for compiling kernels that include the device headers)
 - EFA kernel driver
 - Compatible GPU with CUDA support
 
@@ -346,8 +382,9 @@ This produces:
 
 ### Linking with Applications
 ```bash
-# Host-side code (links against libefacudadp for create/destroy)
-g++ -o myapp_host myapp_host.cpp -ICUDA/host -ICUDA/common -Lbuild -lefacudadp -lcudart
+# Host-side code links against libefacudadp for queue initialization; the
+# library itself needs no CUDA library.
+g++ -o myapp_host myapp_host.cpp -ICUDA/host -ICUDA/common -Lbuild -lefacudadp
 
 # CUDA kernel code (includes device headers directly)
 nvcc -o myapp_kernel myapp_kernel.cu -ICUDA/device -ICUDA/common
@@ -360,7 +397,7 @@ For direct inline usage in CUDA kernels, include `efa_cuda_dp_impl.cuh` directly
 ### Threading and Concurrency
 
 #### Object Lifecycle Operations
-- **Single-threaded only**: Queue creation/destruction (`efa_cuda_create_cq`, `efa_cuda_destroy_cq`, `efa_cuda_create_qp`, `efa_cuda_destroy_qp`) must not be called concurrently with any other operations
+- **Single-threaded only**: Queue initialization (`efa_cuda_init_cq`, `efa_cuda_init_qp`) must not be called concurrently with any other operations on the same queue storage
 
 #### Queue State Operations
 - **Single-threaded only**: Operations that modify queue state (`efa_cuda_cq_pop`, `efa_cuda_start_sq_batch`, `efa_cuda_flush_sq_wrs`, `efa_cuda_post_recv_wr`, `efa_cuda_flush_rq_wrs`) must be serialized per queue
