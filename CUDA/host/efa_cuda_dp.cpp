@@ -179,8 +179,8 @@ static int efa_init_qp_v0(void *qp_buf, uint32_t qp_buf_size, const struct efa_c
 {
 	uint32_t sq_max_inline_data = efa_qp_attr_or_zero(attrs, sq_max_inline_data, inlen);
 	uint32_t sq_max_rdma_sges = efa_qp_attr_or_zero(attrs, sq_max_rdma_sges, inlen);
-	uint32_t sq_wq_caps = efa_qp_attr_or_zero(attrs, sq_wq_caps, inlen);
-	uint32_t rq_wq_caps = efa_qp_attr_or_zero(attrs, rq_wq_caps, inlen);
+	uint32_t sq_caps = efa_qp_attr_or_zero(attrs, sq_caps, inlen);
+	uint32_t rq_caps = efa_qp_attr_or_zero(attrs, rq_caps, inlen);
 	struct efa_cuda_qp_v0 *qp;
 	int ret;
 
@@ -198,10 +198,10 @@ static int efa_init_qp_v0(void *qp_buf, uint32_t qp_buf_size, const struct efa_c
 		return -EOPNOTSUPP;
 	}
 
-	if (sq_wq_caps || rq_wq_caps) {
+	if (sq_caps || rq_caps) {
 		EFA_CUDA_LOG_ERR("major 0 supports no work queue capabilities, got SQ 0x%x "
 				 "RQ 0x%x",
-				 sq_wq_caps, rq_wq_caps);
+				 sq_caps, rq_caps);
 		return -EOPNOTSUPP;
 	}
 
@@ -263,24 +263,24 @@ static int efa_init_qp_v1(void *qp_buf, uint32_t qp_buf_size, const struct efa_c
 		return -EOPNOTSUPP;
 	}
 
-	if (!efa_field_avail(struct efa_cuda_qp_attrs, rq_wq_caps, inlen)) {
+	if (!efa_field_avail(struct efa_cuda_qp_attrs, rq_caps, inlen)) {
 		EFA_CUDA_LOG_ERR("QP attributes too short for major 1: %u bytes", inlen);
 		return -EOPNOTSUPP;
 	}
 
-	if (attrs->sq_wq_caps & ~(uint32_t)EFA_CUDA_WQ_CAPS_64_BIT_REQ_ID) {
-		EFA_CUDA_LOG_ERR("unexpected SQ capabilities 0x%x", attrs->sq_wq_caps);
+	if (attrs->sq_caps & ~(uint32_t)EFA_CUDA_WQ_CAPS_64_BIT_REQ_ID) {
+		EFA_CUDA_LOG_ERR("unexpected SQ capabilities 0x%x", attrs->sq_caps);
 		return -EOPNOTSUPP;
 	}
 
 	/* Device code posts 64-bit request IDs unconditionally. */
-	if (!(attrs->sq_wq_caps & EFA_CUDA_WQ_CAPS_64_BIT_REQ_ID)) {
+	if (!(attrs->sq_caps & EFA_CUDA_WQ_CAPS_64_BIT_REQ_ID)) {
 		EFA_CUDA_LOG_ERR("SQ must support 64-bit request IDs");
 		return -EOPNOTSUPP;
 	}
 
-	if (attrs->rq_wq_caps) {
-		EFA_CUDA_LOG_ERR("unexpected RQ capabilities 0x%x", attrs->rq_wq_caps);
+	if (attrs->rq_caps) {
+		EFA_CUDA_LOG_ERR("unexpected RQ capabilities 0x%x", attrs->rq_caps);
 		return -EOPNOTSUPP;
 	}
 

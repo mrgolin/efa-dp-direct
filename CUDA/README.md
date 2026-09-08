@@ -93,8 +93,8 @@ struct efa_cuda_qp_attrs {
     uint32_t rq_entry_size;     // Receive queue entry size
     uint32_t sq_max_inline_data;// Maximum inline data size in send queue
     uint32_t sq_max_rdma_sges;  // Maximum SGEs for RDMA operations
-    uint32_t sq_wq_caps;        // Send queue capabilities (see efa_cuda_wq_caps)
-    uint32_t rq_wq_caps;        // Receive queue capabilities (see efa_cuda_wq_caps)
+    uint32_t sq_caps;        // Send queue capabilities (see efa_cuda_wq_caps)
+    uint32_t rq_caps;        // Receive queue capabilities (see efa_cuda_wq_caps)
 };
 ```
 

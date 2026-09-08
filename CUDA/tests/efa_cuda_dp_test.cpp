@@ -46,7 +46,7 @@ static struct efa_cuda_cq_attrs valid_cq_attrs(void)
 	return attrs;
 }
 
-static struct efa_cuda_qp_attrs valid_qp_attrs(uint32_t sq_entry_size, uint32_t sq_wq_caps)
+static struct efa_cuda_qp_attrs valid_qp_attrs(uint32_t sq_entry_size, uint32_t sq_caps)
 {
 	struct efa_cuda_qp_attrs attrs;
 
@@ -60,7 +60,7 @@ static struct efa_cuda_qp_attrs valid_qp_attrs(uint32_t sq_entry_size, uint32_t 
 	attrs.sq_max_batch = 8;
 	attrs.sq_entry_size = sq_entry_size;
 	attrs.rq_entry_size = 16;
-	attrs.sq_wq_caps = sq_wq_caps;
+	attrs.sq_caps = sq_caps;
 
 	return attrs;
 }
@@ -127,17 +127,17 @@ static void test_init_qp_v1(struct efa_cuda_host_context *, struct efa_cuda_host
 	CHECK(qp.sq.wr_ctx.write_inline_data_offset == 0,
 	      "64B WQE has no rdma-write inline");
 
-	attrs.sq_wq_caps = 0;
+	attrs.sq_caps = 0;
 	CHECK(efa_cuda_init_qp(v1, &qp, sizeof(qp), &attrs, sizeof(attrs)) == -EOPNOTSUPP,
 	      "64-bit request ID capability required");
 
-	attrs.sq_wq_caps = EFA_CUDA_WQ_CAPS_64_BIT_REQ_ID;
+	attrs.sq_caps = EFA_CUDA_WQ_CAPS_64_BIT_REQ_ID;
 	attrs.sq_entry_size = 96;
 	CHECK(efa_cuda_init_qp(v1, &qp, sizeof(qp), &attrs, sizeof(attrs)) == -EOPNOTSUPP,
 	      "invalid WQE size rejected");
 
 	attrs.sq_entry_size = 64;
-	attrs.rq_wq_caps = 0x2;
+	attrs.rq_caps = 0x2;
 	CHECK(efa_cuda_init_qp(v1, &qp, sizeof(qp), &attrs, sizeof(attrs)) == -EOPNOTSUPP,
 	      "RQ capabilities rejected");
 }
@@ -166,7 +166,7 @@ static void test_init_qp_v0(struct efa_cuda_host_context *v0, struct efa_cuda_ho
 	      "128B WQE rejected");
 
 	attrs.sq_entry_size = 64;
-	attrs.sq_wq_caps = EFA_CUDA_WQ_CAPS_64_BIT_REQ_ID;
+	attrs.sq_caps = EFA_CUDA_WQ_CAPS_64_BIT_REQ_ID;
 	CHECK(efa_cuda_init_qp(v0, &qp, sizeof(qp), &attrs, sizeof(attrs)) == -EOPNOTSUPP,
 	      "capabilities rejected");
 }

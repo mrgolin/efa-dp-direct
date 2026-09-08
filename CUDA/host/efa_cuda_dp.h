@@ -50,8 +50,8 @@ struct efa_cuda_qp_attrs {
 	uint32_t rq_entry_size;
 	uint32_t sq_max_inline_data;
 	uint32_t sq_max_rdma_sges;
-	uint32_t sq_wq_caps;
-	uint32_t rq_wq_caps;
+	uint32_t sq_caps;
+	uint32_t rq_caps;
 };
 
 struct efa_cuda_host_context;
